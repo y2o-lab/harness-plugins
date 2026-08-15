@@ -48,15 +48,12 @@ Harnessは `PreToolUse`、`PostToolUse`、`Stop` Hookをバンドルしていま
 
 Hookは補助的なガードです。Hookを利用しない環境でも、後述する `verify` が正規の再現可能な検証経路です。
 
-## 3. 対象リポジトリを診断する
+## 3. 対象リポジトリで使う
 
-次の例では、`HARNESS_PLUGIN_DIR` にインストール済みプラグインの絶対パスを設定しています。`codex plugin marketplace list` で Marketplace の実体パスを確認してから、その配下の `codex-plugins/harness` を指定してください。
+対象リポジトリで Codex を開き、新しいスレッドで Harness を依頼してください。`HARNESS_PLUGIN_DIR` や `PATH` の設定は不要です。Harness Skill は、Codex にインストールされたプラグインの CLI を毎回自動検出して実行します。
 
-```bash
-HARNESS_PLUGIN_DIR="/path/from/codex-plugin-marketplace-list/codex-plugins/harness"
-
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" detect --root /path/to/target-repository
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" doctor --root /path/to/target-repository
+```text
+$harness-doctor このリポジトリを診断して。
 ```
 
 `detect` は `package.json` scripts、ロックファイル、主要設定ファイルを読み、各capabilityについて選択したコマンド・provider・confidence・根拠をJSONで返します。`doctor` は設定不整合、未解決のrequired capability、直近の実行失敗、イベント保存状態、Hookの扱いを区別して報告します。
@@ -65,14 +62,14 @@ node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" doctor --root /path/to/target-rep
 
 まずは必ずdry-runで提案を確認します。
 
-```bash
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" adopt --root /path/to/target-repository
+```text
+$harness-adopt このリポジトリに Harness を導入して。まずは dry-run の提案だけ表示して。
 ```
 
 内容を確認して承認できる場合だけ、設定ファイル・スキーマコピー・`.gitignore` の `.harness/` エントリを作成します。
 
-```bash
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" adopt --write --root /path/to/target-repository
+```text
+上の Harness 導入案を承認します。設定を書き込んでください。
 ```
 
 `adopt --write` は既存の `harness-settings.json` を上書きしません。既存設定がある場合は手動で差分を統合してください。
@@ -120,24 +117,17 @@ node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" adopt --write --root /path/to/tar
 
 ## 5. 日常の使い方
 
-対象リポジトリで実行するか、常に `--root` を指定してください。
+対象リポジトリで Codex を開始し、必要な Skill を指定します。どの操作でも環境変数やプラグインの保存先を指定する必要はありません。
+
+```text
+$harness-doctor 現在の設定と検出結果を診断して。
+$harness-promote ローカルイベントを分析して、改善候補を提示して。
+```
+
+ターミナルから CLI を直接使う場合だけ、次の一行でインストール済みプラグインを自動解決できます。シェル設定への追記や再起動は不要です。
 
 ```bash
-# 検出結果と設定状態
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" detect
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" doctor
-
-# capabilityを単体実行
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" run lint
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" run format
-
-# stop phase相当の検証（run stop は verify --phase stop の短縮形）
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" run stop
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" verify --phase stop
-
-# 繰り返し発生した失敗をローカルで分析
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" promote analyze
-node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" promote analyze --write
+node "$(codex plugin list | awk '$1 ~ /^harness@/ { path = $NF "/scripts/harness.mjs" } END { print path }')" doctor
 ```
 
 `promote analyze --write` は `.harness/dashboard.md` を生成します。提案はローカルかつadvisoryであり、設定変更、依存追加、GitHub Issue作成は自動で行いません。
@@ -166,7 +156,7 @@ Harnessのローカルイベントを分析し、設定変更はせずに改善�
 
 | 状況 | 対処 |
 | --- | --- |
-| プラグインが表示されない | `codex plugin marketplace add ./codex-plugins` 後に `codex plugin list` を確認し、Codexを更新してください。 |
+| プラグインが表示されない | `codex plugin marketplace add Inoue416/harness-plugins --ref main` 後に `codex plugin list` を確認し、新しいCodexスレッドを開始してください。 |
 | Hookが実行されない | `/hooks` で信頼状態を確認してください。Hookが無効でも `verify` を実行できます。 |
 | capabilityが未検出 | `doctor` で根拠を確認し、必要なら `harness-settings.json` に `command` を明示してください。 |
 | `adopt --write` が拒否される | 既存の `harness-settings.json` を保護しています。提案を確認して手動統合してください。 |
