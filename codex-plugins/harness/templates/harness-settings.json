@@ -1,0 +1,26 @@
+{
+  "$schema": "./.harness/schema/harness-settings.schema.json",
+  "version": 1,
+  "quality": {
+    "lint": { "mode": "required", "strategy": "changed" },
+    "format": { "mode": "required", "strategy": "changed" },
+    "typecheck": { "mode": "advisory", "strategy": "affected" },
+    "test": { "mode": "advisory", "strategy": "affected" },
+    "build": { "mode": "advisory", "strategy": "affected" }
+  },
+  "lifecycle": {
+    "postEdit": ["format"],
+    "stop": ["lint", "format", "typecheck"]
+  },
+  "guards": {
+    "dangerousCommands": { "mode": "required" },
+    "protectedFiles": { "mode": "required" },
+    "secrets": { "mode": "required" }
+  },
+  "promotion": {
+    "mode": "advisory",
+    "issueMode": "manual",
+    "repositoryThreshold": 0.7,
+    "pluginThreshold": 0.8
+  }
+}

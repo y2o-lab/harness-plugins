@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Publish"
+  short_description: "Commit and synchronize remotes with Git only."
+  default_prompt: "Use $git-github-via-git to commit and push the intended changes."

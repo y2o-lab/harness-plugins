@@ -1,0 +1,44 @@
+{
+  "description": "Best-effort Harness lifecycle adapters. They delegate to the Harness CLI and do not contain provider commands.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hook-adapter.mjs\" preCommand",
+            "timeout": 3,
+            "statusMessage": "Checking destructive-command policy"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hook-adapter.mjs\" postEdit",
+            "timeout": 20,
+            "async": true,
+            "statusMessage": "Running fast Harness feedback"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hook-adapter.mjs\" stop",
+            "timeout": 45,
+            "statusMessage": "Running Harness stop checks"
+          }
+        ]
+      }
+    ]
+  }
+}

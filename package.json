@@ -1,0 +1,9 @@
+{
+  "name": "harness-plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test codex-plugins/harness/tests/*.test.mjs",
+    "harness": "node codex-plugins/harness/scripts/harness.mjs"
+  }
+}

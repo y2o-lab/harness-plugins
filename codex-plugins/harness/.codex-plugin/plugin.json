@@ -1,0 +1,24 @@
+{
+  "name": "harness",
+  "version": "0.1.0",
+  "description": "Discover, verify, and improve repository quality workflows safely.",
+  "author": {
+    "name": "Harness Plugins"
+  },
+  "license": "MIT",
+  "keywords": ["codex", "quality", "harness", "verification"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Harness",
+    "shortDescription": "Evidence-based repository quality workflows.",
+    "longDescription": "Discovers existing quality commands, verifies changes through one CLI, and creates local evidence-backed improvement proposals.",
+    "developerName": "Harness Plugins",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Diagnose this repository with the Harness plugin.",
+      "Adopt Harness without replacing existing quality tools.",
+      "Analyze local Harness events for safe improvement proposals."
+    ]
+  }
+}

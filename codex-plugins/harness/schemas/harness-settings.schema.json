@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness settings v1",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "quality": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": { "enum": ["off", "advisory", "required"] },
+          "strategy": { "enum": ["changed", "affected", "all"] },
+          "provider": { "type": "string" },
+          "command": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dangerousCommands": { "$ref": "#/$defs/modePolicy" },
+        "protectedFiles": { "$ref": "#/$defs/modePolicy" },
+        "secrets": { "$ref": "#/$defs/modePolicy" }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "advisory"] },
+        "issueMode": { "enum": ["off", "manual"] },
+        "repositoryThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "pluginThreshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "modePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "mode": { "enum": ["off", "advisory", "required"] } }
+    }
+  }
+}
