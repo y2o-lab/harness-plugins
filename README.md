@@ -4,7 +4,7 @@
 
 ## はじめ方
 
-1. [プラグインの導入・設定・運用ガイド](codex-plugins/harness/README.md) に従い、ローカルMarketplaceを Codex に追加します。
+1. [プラグインの導入・設定・運用ガイド](codex-plugins/harness/README.md) に従い、GitHub Marketplaceを Codex に追加します。
 2. 新しいCodexスレッドで `Harness でこのリポジトリを診断して` と依頼するか、CLIで `detect` を実行します。
 3. `adopt` の提案を確認してから、必要な場合のみ `adopt --write` で対象リポジトリへ設定を作成します。
 

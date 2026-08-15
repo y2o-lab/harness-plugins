@@ -17,11 +17,17 @@ Harness は、既存リポジトリの品質チェックを安全に統一する
 
 ## 1. Codexへプラグインを追加する
 
-このリポジトリには、[ローカルMarketplace定義](../.agents/plugins/marketplace.json) が含まれています。リポジトリのルートで次を実行してください。
+GitHub 上の Marketplace を追加してインストールします。リポジトリを手元に clone する必要はありません。
 
 ```bash
-codex plugin marketplace add ./codex-plugins
-codex plugin add harness@harness-local
+codex plugin marketplace add Inoue416/harness-plugins --ref main
+codex plugin add harness@harness
+```
+
+更新版を取得するには次を実行します。
+
+```bash
+codex plugin marketplace upgrade harness
 ```
 
 導入状態は次で確認できます。
@@ -30,7 +36,7 @@ codex plugin add harness@harness-local
 codex plugin list
 ```
 
-Codexアプリで導入する場合は、アプリを再起動または更新して `Harness Local` を選択し、`Harness` をインストールしてください。SkillやHookを確実に読み込ませるため、導入後は**新しいスレッド**で試してください。
+Codexアプリで導入する場合は、アプリを再起動または更新して `Harness` Marketplace を選択し、`Harness` をインストールしてください。SkillやHookを確実に読み込ませるため、導入後は**新しいスレッド**で試してください。
 
 ## 2. Hookを確認・信頼する
 
@@ -44,10 +50,10 @@ Hookは補助的なガードです。Hookを利用しない環境でも、後述
 
 ## 3. 対象リポジトリを診断する
 
-次の例では、`HARNESS_PLUGIN_DIR` にこのプラグインへの絶対パスを設定しています。
+次の例では、`HARNESS_PLUGIN_DIR` にインストール済みプラグインの絶対パスを設定しています。`codex plugin marketplace list` で Marketplace の実体パスを確認してから、その配下の `codex-plugins/harness` を指定してください。
 
 ```bash
-HARNESS_PLUGIN_DIR="/absolute/path/to/harness-plugins/codex-plugins/harness"
+HARNESS_PLUGIN_DIR="/path/from/codex-plugin-marketplace-list/codex-plugins/harness"
 
 node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" detect --root /path/to/target-repository
 node "$HARNESS_PLUGIN_DIR/scripts/harness.mjs" doctor --root /path/to/target-repository
