@@ -5,12 +5,7 @@ description: Analyze local Harness events and produce evidence-backed repository
 
 # Harness promotion
 
-Before running a Harness command, resolve the installed CLI from Codex's plugin registry. Run this from the target repository; this shell variable is command-local and must never be requested from the user or persisted in their shell profile:
-
-```bash
-HARNESS_CLI="$(codex plugin list | awk '$1 ~ /^harness@/ { path = $NF "/scripts/harness.mjs" } END { print path }')"
-test -n "$HARNESS_CLI" && node "$HARNESS_CLI" <command>
-```
+Read [the shared workflow](../../references/workflow.md) for authorization boundaries, CLI resolution, and proportionate verification. Resolve the CLI once per task.
 
 1. Run `promote analyze` through the resolved CLI before proposing any change. Use `--write` only when the user asks to write the local dashboard.
 2. Evaluate recurrence, distinct sessions, days observed, confidence, impact, fixability, and distribution. A raw failure count alone is never enough.

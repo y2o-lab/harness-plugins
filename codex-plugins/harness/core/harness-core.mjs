@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises"
 import { basename, join, resolve } from "node:path"
-import { spawn } from "node:child_process"
+import { runShell } from "./process-runner.mjs"
 
 export const CAPABILITIES = ["lint", "format", "typecheck", "test", "build"]
 const VALID_MODES = new Set(["off", "advisory", "required"])
@@ -11,7 +11,7 @@ const DEFAULT_QUALITY = Object.fromEntries(CAPABILITIES.map((name) => [name, { m
 
 const scriptNames = {
   lint: ["lint", "check:lint"],
-  format: ["format:check", "format", "check:format"],
+  format: ["format:check", "check:format"],
   typecheck: ["typecheck", "type-check", "check:types"],
   test: ["test", "test:unit"],
   build: ["build"]
@@ -46,15 +46,27 @@ export async function loadSettings(root) {
     return { path, value: null, diagnostics: [{ status: "error", code: "settings-invalid-json", message: error ?? "Settings must be an object." }] }
   }
   const diagnostics = []
+  const object = (item) => item !== null && typeof item === "object" && !Array.isArray(item)
   if (value.version !== 1) diagnostics.push({ status: "error", code: "settings-version", message: "Harness settings must declare version: 1." })
+  for (const section of ["quality", "lifecycle", "guards", "execution"]) {
+    if (value[section] !== undefined && !object(value[section])) diagnostics.push({ status: "error", code: "settings-invalid-section", message: `${section} must be an object.` })
+  }
   for (const [capability, policy] of Object.entries(value.quality ?? {})) {
     if (!CAPABILITIES.includes(capability)) diagnostics.push({ status: "warning", code: "settings-unknown-capability", message: `Unknown capability: ${capability}.` })
-    if (!policy || typeof policy !== "object") diagnostics.push({ status: "error", code: "settings-invalid-policy", message: `Policy for ${capability} must be an object.` })
-    if (policy?.mode && !VALID_MODES.has(policy.mode)) diagnostics.push({ status: "error", code: "settings-invalid-mode", message: `${capability}.mode is invalid.` })
-    if (policy?.strategy && !VALID_STRATEGIES.has(policy.strategy)) diagnostics.push({ status: "error", code: "settings-invalid-strategy", message: `${capability}.strategy is invalid.` })
+    if (!object(policy)) diagnostics.push({ status: "error", code: "settings-invalid-policy", message: `Policy for ${capability} must be an object.` })
+    if (policy?.mode !== undefined && !VALID_MODES.has(policy.mode)) diagnostics.push({ status: "error", code: "settings-invalid-mode", message: `${capability}.mode is invalid.` })
+    if (policy?.strategy !== undefined && !VALID_STRATEGIES.has(policy.strategy)) diagnostics.push({ status: "error", code: "settings-invalid-strategy", message: `${capability}.strategy is invalid.` })
+    if (policy?.command !== undefined && (typeof policy.command !== "string" || !policy.command.trim())) diagnostics.push({ status: "error", code: "settings-invalid-command", message: `${capability}.command must be a nonempty string.` })
+  }
+  for (const [phase, capabilities] of Object.entries(value.lifecycle ?? {})) {
+    if (!Array.isArray(capabilities) || capabilities.some((name) => !CAPABILITIES.includes(name))) diagnostics.push({ status: "error", code: "settings-invalid-lifecycle", message: `Invalid capabilities for lifecycle phase: ${phase}.` })
+  }
+  for (const [key, limit] of Object.entries(value.execution ?? {})) {
+    const maximum = { timeoutMs: 3_600_000, maxOutputBytes: 1_048_576 }[key]
+    if (!maximum || !Number.isInteger(limit) || limit < 1 || limit > maximum) diagnostics.push({ status: "error", code: "settings-invalid-execution", message: `Invalid execution limit: ${key}.` })
   }
   for (const [guard, policy] of Object.entries(value.guards ?? {})) {
-    if (!policy || typeof policy !== "object" || (policy.mode && !VALID_MODES.has(policy.mode))) diagnostics.push({ status: "error", code: "settings-invalid-guard", message: `Guard policy for ${guard} is invalid.` })
+    if (!object(policy) || (policy.mode !== undefined && !VALID_MODES.has(policy.mode))) diagnostics.push({ status: "error", code: "settings-invalid-guard", message: `Guard policy for ${guard} is invalid.` })
   }
   return { path, value, diagnostics }
 }
@@ -92,9 +104,9 @@ export async function detectRepository(rootInput = process.cwd()) {
   }
   return {
     root,
-    stack: packageResult.value ? ["nodejs", packageResult.value.types === "module" ? "esm" : "javascript"] : [],
+    stack: packageResult.value ? ["nodejs", packageResult.value.type === "module" ? "esm" : "javascript"] : [],
     packageManager,
-    diagnostics: packageResult.error ? [{ status: "error", code: "package-json-invalid", message: packageResult.error }] : [],
+    diagnostics: packageResult.error ? [{ status: "error", code: "package-json-invalid", message: packageResult.error }] : typeof scripts.format === "string" && !capabilities.format.command ? [{ status: "warning", code: "format-check-unresolved", message: "A format script exists, but may write files. Provide format:check / check:format or an explicit quality.format.command after inspecting it." }] : [],
     capabilities
   }
 }
@@ -124,18 +136,6 @@ export async function resolveCapabilities(rootInput = process.cwd()) {
   return { root, detection, settings, capabilities: resolved }
 }
 
-function runShell(command, cwd) {
-  return new Promise((resolveRun) => {
-    const child = spawn(command, { cwd, shell: true, env: { ...process.env, HARNESS_ACTIVE: "1" }, stdio: ["ignore", "pipe", "pipe"] })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", (chunk) => { stdout += chunk })
-    child.stderr.on("data", (chunk) => { stderr += chunk })
-    child.on("error", (error) => resolveRun({ exitCode: 1, stdout, stderr: `${stderr}${error.message}` }))
-    child.on("close", (exitCode) => resolveRun({ exitCode: exitCode ?? 1, stdout, stderr }))
-  })
-}
-
 function hash(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`
 }
@@ -146,22 +146,27 @@ async function writeEvent(root, event) {
   await appendFile(join(directory, "events.ndjson"), `${JSON.stringify(event)}\n`, "utf8")
 }
 
-async function changedFiles(root) {
-  const result = await runShell("git diff --name-only HEAD", root)
+async function changedFiles(root, deadline) {
+  const result = await runShell("git diff --name-only HEAD", root, { timeoutMs: Math.max(1, Math.min(5000, (deadline ?? Infinity) - Date.now())) })
   return result.exitCode === 0 ? result.stdout.split(/\r?\n/).map((file) => file.trim()).filter(Boolean) : []
 }
 
 export async function runCapability(rootInput, capability, options = {}) {
-  const resolved = await resolveCapabilities(rootInput)
+  const resolved = options.resolved ?? await resolveCapabilities(rootInput)
+  const diagnostics = [...resolved.settings.diagnostics, ...resolved.detection.diagnostics].filter((item) => item.status === "error")
+  if (diagnostics.length) return { status: "error", capability, code: "configuration-invalid", diagnostics, exitCode: 2 }
   const item = resolved.capabilities[capability]
   if (!item) return { status: "error", code: "unknown-capability", message: `Unsupported capability: ${capability}.`, exitCode: 2 }
   if (item.status === "off") return { status: "skipped", capability, message: "Disabled by policy.", exitCode: 0 }
-  if (!item.command) return { status: "not-applicable", capability, message: "No existing command was detected; no command was guessed.", exitCode: 0 }
-  const files = options.changedFiles ?? (item.strategy === "changed" ? await changedFiles(resolved.root) : [])
+  if (!item.command) return { status: item.mode === "required" ? "error" : "not-applicable", capability, code: "capability-unresolved", message: "No existing check command was detected; configure an explicit command if needed.", exitCode: item.mode === "required" ? 1 : 0 }
+  const files = options.changedFiles ?? (item.strategy === "changed" ? await changedFiles(resolved.root, options.deadline) : [])
   const strategy = item.strategy === "all" ? { requested: "all", effective: "all" } : { requested: item.strategy, effective: "all", reason: "The selected repository script has no safe, provider-neutral partial-target interface; running it unchanged." }
   const startedAt = new Date().toISOString()
   const started = Date.now()
-  const result = await runShell(item.command, resolved.root)
+  const execution = { ...resolved.settings.value?.execution }
+  if (options.deadline) execution.timeoutMs = Math.min(execution.timeoutMs ?? 120_000, Math.max(1, options.deadline - Date.now()))
+  if (options.deadline && Date.now() >= options.deadline) return { status: "error", capability, code: "verification-budget-exhausted", message: "Hook time budget exhausted; run harness verify manually.", exitCode: 1 }
+  const result = await runShell(item.command, resolved.root, execution)
   const event = {
     eventId: `evt_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
     occurredAt: startedAt,
@@ -179,7 +184,7 @@ export async function runCapability(rootInput, capability, options = {}) {
   try {
     await writeEvent(resolved.root, event)
   } catch (error) {
-    return { status: "error", code: "event-store-write-failed", message: error instanceof Error ? error.message : String(error), result, exitCode: result.exitCode || 1 }
+    return { status: "error", capability, code: "event-store-write-failed", message: error instanceof Error ? error.message : String(error), result, exitCode: result.exitCode || 1 }
   }
   return { status: result.exitCode === 0 ? "passed" : "failed", capability, command: item.command, provider: item.provider, strategy, event, result, exitCode: result.exitCode }
 }
@@ -188,12 +193,18 @@ export async function verify(rootInput, options = {}) {
   const resolved = await resolveCapabilities(rootInput)
   const phase = options.phase ?? "stop"
   const configured = resolved.settings.value?.lifecycle?.[phase]
-  const fallback = phase === "postEdit" ? ["format"] : CAPABILITIES.filter((capability) => resolved.capabilities[capability].status === "ready")
-  const capabilities = Array.isArray(configured) ? configured : fallback
+  const diagnostics = [...resolved.settings.diagnostics, ...resolved.detection.diagnostics].filter((item) => item.status === "error")
+  if (diagnostics.length) return { phase, runs: [], diagnostics, exitCode: 2 }
+  const fallback = phase === "postEdit" ? [] : options.hook ? ["lint", "format", "typecheck"] : CAPABILITIES.filter((capability) => resolved.capabilities[capability].status === "ready")
+  const required = phase === "postEdit" ? [] : CAPABILITIES.filter((name) => resolved.capabilities[name].mode === "required")
+  const capabilities = [...new Set([...(configured ?? fallback), ...required])]
   const runs = []
-  for (const capability of capabilities) runs.push(await runCapability(resolved.root, capability, { phase }))
-  const requiredFailure = runs.some((run) => run.status === "failed" && resolved.capabilities[run.capability]?.mode === "required")
-  return { phase, runs, exitCode: requiredFailure ? 1 : 0 }
+  for (const capability of capabilities) {
+    const run = await runCapability(resolved.root, capability, { phase, resolved, deadline: options.deadline })
+    runs.push({ ...run, mode: resolved.capabilities[capability]?.mode })
+  }
+  const requiredFailures = runs.filter((run) => run.exitCode !== 0 && run.mode === "required").map((run) => run.capability)
+  return { phase, runs, requiredFailures, exitCode: requiredFailures.length ? 1 : 0 }
 }
 
 export async function doctor(rootInput) {
@@ -206,9 +217,9 @@ export async function doctor(rootInput) {
   const eventsPath = join(resolved.root, ".harness", "events.ndjson")
   if (existsSync(eventsPath)) {
     const events = (await readFile(eventsPath, "utf8")).split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)] } catch { return [] } })
-    const lastFailure = [...events].reverse().find((event) => event.kind === "violation" && event.outcome === "failed")
+    const latest = new Map(events.map((event) => [`${event.capability}:${event.provider}`, event]))
     diagnostics.push({ status: "pass", code: "event-store", message: "Local event store is the source of truth; it is never sent externally by this plugin." })
-    if (lastFailure) diagnostics.push({ status: "error", code: "command-last-failed", message: `The most recent recorded ${lastFailure.capability} run failed during ${lastFailure.phase}.` })
+    for (const event of latest.values()) if (event.outcome === "failed") diagnostics.push({ status: "error", code: "command-last-failed", message: `The most recent recorded ${event.capability} run failed during ${event.phase}.` })
   } else {
     diagnostics.push({ status: "warning", code: "event-store", message: "No local event store exists yet; run a capability to create one." })
   }
@@ -226,7 +237,8 @@ export async function adopt(rootInput, pluginRoot, write = false) {
     $schema: "./.harness/schema/harness-settings.schema.json",
     version: 1,
     quality,
-    lifecycle: { postEdit: ["format"], stop: ["lint", "format", "typecheck"] },
+    lifecycle: { postEdit: [], stop: ["lint", "format", "typecheck"] },
+    execution: { timeoutMs: 120_000, maxOutputBytes: 8192 },
     guards: { dangerousCommands: { mode: "required" }, protectedFiles: { mode: "required" }, secrets: { mode: "required" } },
     promotion: { mode: "advisory", issueMode: "manual", repositoryThreshold: 0.7, pluginThreshold: 0.8 }
   }

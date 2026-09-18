@@ -1,5 +1,5 @@
 {
-  "description": "Best-effort Harness lifecycle adapters. They delegate to the Harness CLI and do not contain provider commands.",
+  "description": "Best-effort Harness lifecycle adapters sharing the CLI verification core, with bounded execution and no provider commands.",
   "hooks": {
     "PreToolUse": [
       {

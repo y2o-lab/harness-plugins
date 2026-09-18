@@ -1,12 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
-import { evaluateToolGuard } from "../core/harness-core.mjs"
+import { resolve } from "node:path"
+import { evaluateToolGuard, verify } from "../core/harness-core.mjs"
 
 const phase = process.argv[2]
-const cli = resolve(dirname(fileURLToPath(import.meta.url)), "harness.mjs")
 const input = await new Promise((resolveInput) => {
   let raw = ""
   process.stdin.setEncoding("utf8")
@@ -22,20 +19,23 @@ if (!["postEdit", "stop", "preCommand"].includes(phase)) {
   try { settings = JSON.parse(await readFile(resolve(cwd, "harness-settings.json"), "utf8")) } catch {}
   const guard = evaluateToolGuard(input.tool_input?.command, settings)
   if (guard.decision === "deny") process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: guard.reason } })}\n`)
-} else {
-  const child = spawn(process.execPath, [cli, "verify", "--root", cwd, "--phase", phase], { stdio: ["ignore", "pipe", "pipe"] })
-  let output = ""
-  child.stdout.on("data", (chunk) => { output += chunk })
-  child.on("close", (code) => {
-    let report = null
-    try { report = JSON.parse(output) } catch {}
-    const failures = report?.runs?.filter((run) => run.status === "failed") ?? []
-    if (failures.length > 0) {
-      const message = `Harness ${phase}: ${failures.length} quality check(s) failed. Run harness verify to inspect and repair.`
-      const response = phase === "stop" ? { continue: false, stopReason: message, systemMessage: message } : { systemMessage: message }
-      process.stdout.write(`${JSON.stringify(response)}\n`)
-    } else if ((code ?? 1) !== 0) {
-      process.stdout.write(`${JSON.stringify({ systemMessage: `Harness ${phase} could not complete; run harness doctor.` })}\n`)
+} else if (process.env.HARNESS_ACTIVE !== "1") {
+  // Codex already requested a repair once. Avoid an unbounded Stop cycle;
+  // manual verification remains required and reports any outstanding failure.
+  if (phase === "stop" && input.stop_hook_active) {
+    process.stdout.write(`${JSON.stringify({ systemMessage: "Harness: automatic Stop retry already used. Report the manual verification result and any remaining failures." })}\n`)
+  } else {
+    try {
+      const report = await verify(cwd, { phase, hook: true, deadline: Date.now() + (phase === "stop" ? 35_000 : 15_000) })
+      const failures = report.runs.filter((run) => run.exitCode !== 0)
+      const required = report.requiredFailures ?? []
+      if (report.exitCode !== 0 && phase === "stop") {
+        process.stdout.write(`${JSON.stringify({ decision: "block", reason: `Harness required checks need attention: ${required.length ? required.join(", ") : "invalid configuration (run harness doctor)"}. Repair or resolve the reported blocker, then run harness verify. Do not repeat checks without a change or new evidence.` })}\n`)
+      } else if (failures.length || report.exitCode !== 0) {
+        process.stdout.write(`${JSON.stringify({ systemMessage: `Harness ${phase}: ${failures.length ? failures.map((run) => `${run.capability} (${run.status})`).join(", ") : "invalid configuration"}. Run harness doctor or the affected capability; advisory findings do not block completion.` })}\n`)
+      } else if (phase === "stop") process.stdout.write("{}\n")
+    } catch {
+      process.stdout.write(`${JSON.stringify({ systemMessage: `Harness ${phase} could not complete; run harness doctor. Verification has not passed.` })}\n`)
     }
-  })
+  }
 }

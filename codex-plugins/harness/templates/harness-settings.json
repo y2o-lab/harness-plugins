@@ -9,9 +9,10 @@
     "build": { "mode": "advisory", "strategy": "affected" }
   },
   "lifecycle": {
-    "postEdit": ["format"],
+    "postEdit": [],
     "stop": ["lint", "format", "typecheck"]
   },
+  "execution": { "timeoutMs": 120000, "maxOutputBytes": 8192 },
   "guards": {
     "dangerousCommands": { "mode": "required" },
     "protectedFiles": { "mode": "required" },
