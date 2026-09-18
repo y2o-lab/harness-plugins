@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Discover, verify, and improve repository quality workflows safely.",
   "author": {
     "name": "Harness Plugins"
