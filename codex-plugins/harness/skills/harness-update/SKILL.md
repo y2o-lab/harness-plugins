@@ -5,13 +5,8 @@ description: Safely update a repository already using Harness while preserving l
 
 # Harness update
 
-Before running a Harness command, resolve the installed CLI from Codex's plugin registry. Run this from the target repository; this shell variable is command-local and must never be requested from the user or persisted in their shell profile:
+Read [the shared workflow](../../references/workflow.md) for authorization boundaries, CLI resolution, and proportionate verification. Resolve the CLI once per task.
 
-```bash
-HARNESS_CLI="$(codex plugin list | awk '$1 ~ /^harness@/ { path = $NF "/scripts/harness.mjs" } END { print path }')"
-test -n "$HARNESS_CLI" && node "$HARNESS_CLI" <command>
-```
+Start with `doctor` through the resolved CLI and inspect the existing `harness-settings.json`. Preserve explicit commands, provider choices, and policy modes outside the requested migration scope.
 
-Start with `doctor` through the resolved CLI and inspect the existing `harness-settings.json`. Preserve explicit commands, provider choices, and policy modes unless the user approves a change.
-
-For a schema or plugin update, present a migration plan with affected files, compatibility risks, and rollback. Never overwrite settings. Verify the result through `doctor` and `verify --phase stop` using the resolved CLI; hooks may be tested as an additional best-effort path only.
+For an authorized schema or plugin update, explain affected files and compatibility changes, then merge the scoped changes while preserving local overrides. Do not replace the settings file wholesale. Verify through `doctor` and the relevant checks, including `verify --phase stop`; reuse checks already passed for unchanged inputs. If asked only for a migration plan, return the plan without edits.

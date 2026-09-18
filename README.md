@@ -9,3 +9,5 @@
 3. `adopt` の提案を確認してから、必要な場合のみ `adopt --write` で対象リポジトリへ設定を作成します。
 
 ハーネス設計の根拠は [docs/knowledge/harness-engineering.md](docs/knowledge/harness-engineering.md) にまとめています。
+
+Astra・Sol・Terra・Luna向けの開発フローは `$harness-work` で利用できます。[モデル対応の根拠と検証範囲](docs/knowledge/model-aware-harness.md) に、公式情報、Hook改善、既存設定からの移行上の注意を記載しています。

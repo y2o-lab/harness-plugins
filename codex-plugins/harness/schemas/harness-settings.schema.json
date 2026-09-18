@@ -22,9 +22,14 @@
     },
     "lifecycle": {
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": { "type": "string" }
+      "additionalProperties": { "$ref": "#/$defs/capabilityList" }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000, "default": 120000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 1048576, "default": 8192 }
       }
     },
     "guards": {
@@ -48,6 +53,10 @@
     }
   },
   "$defs": {
+    "capabilityList": {
+      "type": "array",
+      "items": { "enum": ["lint", "format", "typecheck", "test", "build"] }
+    },
     "modePolicy": {
       "type": "object",
       "additionalProperties": false,
