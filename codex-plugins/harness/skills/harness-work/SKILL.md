@@ -1,14 +1,12 @@
 ---
 name: harness-work
-description: Implement or refactor repository code with Harness quality checks and model-aware guidance for Astra, Sol, Terra, and Luna. Use when the user asks to do development work with Harness; diagnosis alone uses harness-doctor.
+description: Implement or refactor repository code using Harness verification, dependency plans, and focused repair feedback. Use when the user asks for development with Harness.
 ---
 
-# Development with Harness
+# Develop with Harness
 
-Read [the shared workflow](../../references/workflow.md). Resolve the CLI as described there, and run `guide --model <current-model>` once if the current model is explicitly known; otherwise run `guide` for shared guidance. The guide is advisory and does not select or reconfigure a model.
+Follow the [shared verification workflow](../../references/workflow.md). Start from the user's observable acceptance criteria. For a simple task, go straight to the relevant command. For a multi-check task, inspect the dependency plan when it clarifies execution or scope.
 
-Use `detect` to identify existing checks. Implement the requested result and run the relevant capabilities with `run <capability>`. Use `verify` to finish configured lifecycle and required checks. Preserve verification evidence for unchanged code during this task; rerun when edits, failures, changed dependencies, or required repository rules justify it.
+Every model uses the same verification policy. If an explicit model needs tailored guidance, `guide --model ID` returns the shared workflow and any available profile. Omit this call if the workflow already provides enough context.
 
-Keep the user's original objective, constraints, completed changes, check results, and remaining work through steering and compaction. Continue authorized independent work while a clarification is pending. If blocked, explain the specific missing input or authority and the completed work.
-
-Report the result, checks actually run, and remaining limitations. An advisory failure is a finding to disclose; an unresolved required check prevents a claim that verification passed.
+Report the behavior verified, checks that actually ran and unresolved findings. Treat a blocked required check as incomplete.

@@ -1,4 +1,4 @@
-# GPT-5.6 Sol
+# Sol
 
 For complex or ambiguous work, establish the desired result, important constraints, and acceptance checks. Use judgment for implementation choices; state assumptions that materially affect the result. Define what done means for narrower tasks so analysis and polishing terminate when those checks pass.
 

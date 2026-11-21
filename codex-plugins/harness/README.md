@@ -1,191 +1,92 @@
 # Harness
 
-Harness は、既存リポジトリの品質チェックを安全に統一する Codex プラグインです。`lint`、`format`、`typecheck`、`test`、`build` を capability として扱い、すでに定義されている package script を根拠とともに選択します。
+既存のコマンドを使って変更を検証する Codex プラグインです。ユーザーが依頼で示した完了条件、リポジトリの `AGENTS.md`、CI、`harness-settings.json` を開発スキルの判断材料にします。検証の順序と合否は Node.js の CLI が決定します。
 
-- 新しい品質ツールを自動導入しない
-- `harness-settings.json` の明示設定を検出結果より優先する
-- Hook が無効でも同じCLIで検証できる
-- イベントは対象リポジトリの `.harness/` にだけ保存し、外部サービスやGitHub Issueを自動更新しない
+## 導入
 
-同梱の `git-github-via-git` Skill は、commit / fetch / pull / push をGitコマンドだけで実行するためのワークフローです。GitHub CLIやAPIを利用しません。
-
-## 必要条件
-
-- Codex CLI またはCodexアプリ
-- Node.js 18以降（Harness CLIの実行用）
-- 対象リポジトリで利用するパッケージマネージャー（npm / pnpm / Yarn など）
-
-## 1. Codexへプラグインを追加する
-
-GitHub 上の Marketplace を追加してインストールします。リポジトリを手元に clone する必要はありません。
+Node.js 18 以降と、対象プロジェクトが使うツールを用意してください。Marketplace からのインストールは次のとおりです。
 
 ```bash
 codex plugin marketplace add Inoue416/harness-plugins --ref main
 codex plugin add harness@harness
-```
-
-更新版を取得するには次を実行します。
-
-```bash
-codex plugin marketplace upgrade harness
-```
-
-導入状態は次で確認できます。
-
-```bash
 codex plugin list
 ```
 
-Codexアプリで導入する場合は、アプリを再起動または更新して `Harness` Marketplace を選択し、`Harness` をインストールしてください。SkillやHookを確実に読み込ませるため、導入後は**新しいスレッド**で試してください。
-
-## 2. Hookを確認・信頼する
-
-Harnessは `PreToolUse`、`PostToolUse`、`Stop` Hookをバンドルしています。CodexはプラグインのコマンドHookを自動信頼しないため、初回は `/hooks` で内容を確認し、信頼してください。
-
-- `PreToolUse`: ルート・ホームへの再帰削除、破壊的Git操作、明白な秘密情報の入力、`.env` 等の保護ファイルへの自動編集を拒否します。
-- `PostToolUse`: `lifecycle.postEdit` に指定したチェックだけを非同期実行します。既定は空です。
-- `Stop`: 軽量チェックとすべての `required` capabilityを実行します。`required` の失敗・未解決、設定エラーは一度だけ修正の継続を要求します。advisoryの失敗は通知のみです。
-
-Hookは補助的なガードです。Hookを利用しない環境でも、後述する `verify` が正規の再現可能な検証経路です。
-
-## 3. 対象リポジトリで使う
-
-対象リポジトリで Codex を開き、新しいスレッドで Harness を依頼してください。`HARNESS_PLUGIN_DIR` や `PATH` の設定は不要です。Harness Skill は、Codex にインストールされたプラグインの CLI を毎回自動検出して実行します。
-
-```text
-$harness-doctor このリポジトリを診断して。
-```
-
-`detect` は `package.json` scripts、ロックファイル、主要設定ファイルを読み、各capabilityについて選択したコマンド・provider・confidence・根拠をJSONで返します。`doctor` は設定不整合、未解決のrequired capability、直近の実行失敗、イベント保存状態、Hookの扱いを区別して報告します。
-
-## 4. Harness設定を導入する
-
-まずdry-runで具体的な提案を確認します。導入まで依頼されている場合は、その許可の範囲で書き込みまで進めます。提案のみの依頼では書き込みません。
-
-```text
-$harness-adopt このリポジトリに Harness を導入して。まずは dry-run の提案だけ表示して。
-```
-
-内容を確認して承認できる場合だけ、設定ファイル・スキーマコピー・`.gitignore` の `.harness/` エントリを作成します。
-
-```text
-上の Harness 導入案を承認します。設定を書き込んでください。
-```
-
-`adopt --write` は既存の `harness-settings.json` を上書きしません。既存設定がある場合は手動で差分を統合してください。
-
-生成される設定の例です。
-
-```json
-{
-  "version": 1,
-  "quality": {
-    "lint": { "mode": "required", "strategy": "changed" },
-    "format": { "mode": "required", "strategy": "changed" },
-    "typecheck": { "mode": "advisory", "strategy": "affected" }
-  },
-  "lifecycle": {
-    "postEdit": [],
-    "stop": ["lint", "format", "typecheck"]
-  },
-  "execution": { "timeoutMs": 120000, "maxOutputBytes": 8192 },
-  "guards": {
-    "dangerousCommands": { "mode": "required" },
-    "protectedFiles": { "mode": "required" },
-    "secrets": { "mode": "required" }
-  },
-  "promotion": { "mode": "advisory", "issueMode": "manual" }
-}
-```
-
-既存scriptと異なるコマンドを使う必要がある場合だけ、capability単位で明示overrideできます。
-
-```json
-{
-  "version": 1,
-  "quality": {
-    "lint": {
-      "mode": "required",
-      "strategy": "all",
-      "provider": "eslint",
-      "command": "pnpm lint:strict"
-    }
-  }
-}
-```
-
-`mode` は `off`、`advisory`、`required` のいずれかです。`required` だけが `verify` の終了コードを失敗にします。`strategy` は `changed`、`affected`、`all` を指定できます。現在のMVPはprovider非依存の安全性を優先し、部分実行用の確実なコマンドを特定できない場合は `all` にフォールバックし、その理由を結果へ表示します。
-
-不正な設定は終了コード2です。requiredの未解決、実行失敗、タイムアウト、イベント保存失敗は成功扱いしません。`lifecycle.stop` に含まれないrequiredも実行します。`verify --phase postEdit` は明示されたチェックだけが対象です。
-
-自動検出するformatコマンドは `format:check` / `check:format` のみです。従来の `format` だけを持つリポジトリでは、読み取り専用か確認したうえで `quality.format.command` を指定してください。明示コマンドは変更せず実行するので、副作用のあるスクリプトも実行され得ます。
-
-各コマンドの既定上限は120秒、stdout/stderr各8 KiBの末尾です。`execution` で変更できます。省略した出力は `outputTruncated`、時間切れは `timedOut` と終了コード124で報告します。Hookには全体でPostToolUse 15秒、Stop 35秒の予算があります。超過時は手動CLIで必要なチェックを完了してください。macOS/Linuxでは時間切れにプロセスグループを停止します。Windowsでは直接の子プロセスのみが対象です。
-
-既存設定は自動移行しません。旧設定の `postEdit: ["format"]` も引き続き有効です。編集ごとの全体実行を減らすには、対象リポジトリの設定を `postEdit: []` に変更します。Hookと手動CLI間の成功キャッシュは実装していません。
-
-## 5. 日常の使い方
-
-対象リポジトリで Codex を開始し、必要な Skill を指定します。どの操作でも環境変数やプラグインの保存先を指定する必要はありません。
-
-```text
-$harness-doctor 現在の設定と検出結果を診断して。
-$harness-promote ローカルイベントを分析して、改善候補を提示して。
-```
-
-ターミナルから CLI を直接使う場合だけ、次の一行でインストール済みプラグインを自動解決できます。シェル設定への追記や再起動は不要です。
+Marketplace の更新は `codex plugin marketplace upgrade harness` です。新しいスレッドでスキルを使用し、Hook は `/hooks` から内容と信頼状態を確認できます。CLI を手動で使う場合、下記はこのソースリポジトリのルートから実行する例です。インストール済みのスキルは自身の配置場所を基準に CLI を解決します。
 
 ```bash
-node "$(codex plugin list | awk '$1 ~ /^harness@/ { path = $NF "/scripts/harness.mjs" } END { print path }')" doctor
+node codex-plugins/harness/scripts/harness.mjs plan --root /path/to/project
 ```
 
-`promote analyze --write` は `.harness/dashboard.md` を生成します。提案はローカルかつadvisoryであり、設定変更、依存追加、GitHub Issue作成は自動で行いません。
+## 日常の使い方
 
-## 6. Codexへの依頼例
-
-新しいスレッドで、次のように依頼できます。
-
-```text
-Harnessでこのリポジトリを診断し、検出根拠と未解決のcapabilityを報告して。
-```
-
-```text
-既存ツールを変更せずにHarness導入案を作って。書き込み前に差分を説明して。
-```
-
-```text
-Harnessのローカルイベントを分析し、設定変更はせずに改善候補を提示して。
-```
-
-## Astra / Sol / Terra / Lunaで開発する
-
-```text
-$harness-work この変更を実装し、既存の品質チェックで検証してください。
-```
-
-`harness-work` は現在のモデルが明示されていればそのガイドだけを読み、共通の作業・検証フローを適用します。CLIからは `node codex-plugins/harness/scripts/harness.mjs guide --model gpt-6-astra` で確認できます（このリポジトリ内の例）。`--model` を省略すると共通ガイドだけを返します。
-
-| モデル | このプラグインでの指示の焦点 |
+| やりたいこと | スキルまたは CLI |
 | --- | --- |
-| `gpt-6-astra` | 許可済み作業の完遂、指示の矛盾解消、適量の検証、途中指示でも目的を保持 |
-| `gpt-5.6-sol` | 複雑な作業の完了条件を定義し、調査・仕上げの範囲を明確にする |
-| `gpt-5.6-terra` | 影響するインターフェースと確認方法を絞り、段階的に実装する |
-| `gpt-5.6-luna` | 入出力・対象ファイル・合格条件を具体化し、小さな単位で検証する |
+| 変更を実装し、利用者の操作経路を検証する | `$harness-work` |
+| 使用するコマンドと検出根拠を調べる | `detect`、`$harness-doctor` |
+| 設定とチェックを導入する | `$harness-adopt`、提案は `adopt`、書き込みは `adopt --write` |
+| 既存の設定を更新する | `$harness-update` |
+| 実行予定・前提条件を確認する | `plan`、Hook 側の既定値を見るには `plan --hook` |
+| 一部のチェックとその前提を実行する | `run test --summary` |
+| 完了時の検証を行う | `verify --summary` または従来の `run stop` |
+| 過去の失敗と回復から改善案を作る | `$harness-promote`、`promote analyze` |
+| Git でブランチやリモートを操作する | `$git-github-via-git` |
 
-ガイドは助言であり、モデルの自動切替や推論量の強制を行いません。サブエージェントもセッションで許可され、独立した仕事を分担できる場合だけ使用します。各モデルの実測性能を保証するものではありません。
+`adopt --write` は設定ファイル、スキーマのコピー、ローカルイベント用の `.gitignore` エントリを作成します。設定ファイルがすでにある場合は提案のみを返します。既存設定があるときの提案はその設定を返します。新規設定の Stop は検出できた lint・format・typecheck を優先し、これらがない場合は検出済みの test または build を1件選びます。
 
-話題のastra向け推論状態維持・compactionは、モデルAPIまたはCodexホストの機能です。このプラグインにはAPIクライアントがなく、会話状態を再構築したり、推論履歴を収集したりしません。設定の選択肢、一次情報、評価方法は [モデル対応の設計根拠](../../docs/knowledge/model-aware-harness.md) を参照してください（ソースリポジトリ内）。
+## 依存グラフの設定例
 
-## イベントとプライバシー
+次の例は対象プロジェクトに `typecheck`、`test`、`build` と `test:ui` がある場合です。型検査とテストを並列に実行でき、両方の成功後にビルドし、その出力を使って画面を検証します。
 
-実行結果は `.harness/events.ndjson` に保存され、`promotion` の集計に使用されます。保存するのはcapability、provider、成否、所要時間、変更ファイル数、ハッシュ化したsession IDなどの最小メタデータです。ソース本文、環境変数値、秘密値、コマンド引数の生値は保存しません。
+```json
+{
+  "version": 1,
+  "quality": {
+    "typecheck": { "mode": "advisory" },
+    "test": { "mode": "required" },
+    "build": { "dependsOn": ["typecheck", "test"] },
+    "ui-smoke": {
+      "command": "npm run test:ui",
+      "mode": "required",
+      "dependsOn": ["build"]
+    }
+  },
+  "lifecycle": { "postEdit": [], "stop": ["ui-smoke"] },
+  "execution": { "maxParallel": 2, "timeoutMs": 120000, "maxOutputBytes": 8192 }
+}
+```
 
-## トラブルシューティング
+- 自動検出の対象は Node.js 系の `lint`、`format`、`typecheck`、`test`、`build` です。言語を問わず `quality.<名前>.command` で既存のプロジェクトコマンドを指定できます。独自名は英小文字で始まり、英小文字・数字・ハイフンを使えます。`stop` と `constructor` は予約名です。
+- `dependsOn` は成功が必要な前提です。1回の検証で同じ名前のチェックは1回だけ実行します。循環や未知の依存先があると、コマンドを開始する前に診断を返します。
+- 並列数の既定値は1、設定範囲は1〜8です。共有する生成物・ポート・DB があるコマンドは順序を定義するか、直列設定を使ってください。上限は1回の CLI または Hook 呼び出しごとに適用されます。
+- `off` は無効、`advisory` は結果を報告、`required` は成功を必須とします。前提が無効・未解決・失敗なら後続は `blocked` となり、`blockedBy` に直接の原因が入ります。独立したチェックは続行します。上の例では型検査の失敗でも `ui-smoke` が保留され、全体は失敗します。
+- 自動検出する整形チェックは `format:check` と `check:format` です。明示コマンドはそのまま実行します。`strategy` が `changed` または `affected` でも、対象を限定するインターフェースのないスクリプトは全体を実行し、詳細結果に理由を含めます。
 
-| 状況 | 対処 |
+## 結果と修正ループ
+
+`verify --summary` は各チェックの状態、所要時間、実行件数、保留件数を返します。成功時の標準出力を省き、失敗時には標準出力・標準エラーの末尾を残します。コマンド、検出元、イベントを含む詳細は通常の `verify` や `doctor` で確認できます。
+
+| 結果 | 読み方 |
 | --- | --- |
-| プラグインが表示されない | `codex plugin marketplace add Inoue416/harness-plugins --ref main` 後に `codex plugin list` を確認し、新しいCodexスレッドを開始してください。 |
-| Hookが実行されない | `/hooks` で信頼状態を確認してください。Hookが無効でも `verify` を実行できます。 |
-| capabilityが未検出 | `doctor` で根拠を確認し、必要なら `harness-settings.json` に `command` を明示してください。 |
-| `adopt --write` が拒否される | 既存の `harness-settings.json` を保護しています。提案を確認して手動統合してください。 |
-| 検証が遅い | `postEdit` と `lifecycle.stop` を確認し、高速な既存scriptを指定してください。requiredはStopで省略されません。大きい検証はCLIで実行できます。 |
+| `passed` | 実行したチェックが成功 |
+| `findings` | advisory の失敗または未解決項目あり |
+| `no-checks` | 検証の実行件数がゼロ |
+| `failed` | 必須チェックが失敗、未解決、または保留 |
+
+`verify` は必須チェックが完了しなければ終了コード1、設定・グラフ不正なら2です。`run CHECK` は指定したチェックの終了コードを返します。修正時は最初に完了しなかった前提とエラーを確認し、原因を直して再検証します。確認できた範囲と未解決事項を最終報告に残します。
+
+各コマンドは既定120秒、出力は標準出力・標準エラーごとに末尾8 KiBです。時間切れは `timedOut`、切り詰めは `outputTruncated` で確認できます。macOS/Linux では時間切れにプロセスグループを停止し、Windows では直接の子プロセスを停止します。
+
+## Codex Hook
+
+- `PreToolUse` はシェル・パッチ入力の既知の危険なパターンを確認します。各ガードのモードに応じて警告または拒否を返します。
+- `PostToolUse` は `lifecycle.postEdit` とその前提を非同期で実行します。既定のリストは空で、全体の時間予算は15秒です。
+- `Stop` は設定したチェックとすべての必須チェックを35秒の予算で検証します。未設定時の Hook 側の候補は lint、format、typecheck です。必須の失敗・設定不正に対する自動継続は1回です。手動の `verify` では Hook の時間予算外で検証できます。
+
+実行メタデータは対象プロジェクトの `.harness/events.ndjson` に記録します。Hook のセッション ID はハッシュ化し、ログ本文やコマンド引数は記録しません。`promote analyze --write` で集計と改善案を `.harness/dashboard.md` に保存できます。改善案の適用はユーザーが選べます。
+
+## 0.2 系からの移行
+
+設定は引き続き `version: 1` です。既存の有効な定義には依存追加や並列化を行わず、明示された `postEdit`、コマンド、required 設定を引き継ぎます。以前は警告だけだった未知の capability 名を独自チェックとして使うには `command` を指定してください。スペルミスのある品質設定と未定義のフェーズは `doctor` または `plan --phase 名前` で確認できます。コピー済みの JSON Schema は必要に応じて同梱の `schemas/harness-settings.schema.json` に更新してください。
+
+`guide --model ID` は指定されたモデルを保持し、対応する短い助言を返します。未登録のモデルやモデル ID が不明な場合も共通ガイドが使えます。課金、推論量、モデルの選択は Codex 側の設定に従います。

@@ -133,8 +133,8 @@ test("doctor clears a recovered failure", async () => {
   assert.equal((await doctor(root)).diagnostics.some((item) => item.code === "command-last-failed"), false)
 })
 
-test("guidance preserves each explicit model, stays advisory, and rejects unknown models", async () => {
-  for (const model of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+test("guidance preserves current and legacy models and accepts arbitrary provider IDs", async () => {
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     const result = await runNode("../scripts/harness.mjs", ["guide", "--model", model])
     assert.equal(result.code, 0)
     const guide = JSON.parse(result.stdout)
@@ -144,6 +144,11 @@ test("guidance preserves each explicit model, stays advisory, and rejects unknow
     assert.ok(guide.common.length > 0 && guide.specific.length > 0)
   }
   assert.equal((await modelGuidance()).specific, null)
-  assert.equal((await modelGuidance("../../other")).exitCode, 2)
+  for (const id of ["company/custom-v7", "../../other"]) {
+    const guide = await modelGuidance(id)
+    assert.equal(guide.model, id)
+    assert.equal(guide.specific, null)
+    assert.ok(guide.common)
+  }
   assert.equal((await runNode("../scripts/harness.mjs", ["guide", "--model"])).code, 2)
 })

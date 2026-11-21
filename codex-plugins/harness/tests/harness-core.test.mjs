@@ -130,3 +130,28 @@ test("CLI supports evidence-based detection and the stop alias", async () => {
   assert.equal(stopped.code, 0)
   assert.equal(JSON.parse(stopped.stdout).phase, "stop")
 })
+
+test("adoption selects an available check in test-only repositories and preserves existing graph settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-adopt-"))
+  await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }))
+  assert.deepEqual((await adopt(root, pluginRoot)).proposal.lifecycle.stop, ["test"])
+  const existing = { version: 1, quality: { smoke: { command: "node check.mjs", dependsOn: ["test"] } }, execution: { maxParallel: 2 } }
+  await writeFile(join(root, "harness-settings.json"), JSON.stringify(existing))
+  assert.deepEqual((await adopt(root, pluginRoot, true)).proposal, existing)
+})
+
+test("promotion counts recovery transitions and follows the user's threshold and off policy", async () => {
+  const root = await fixture()
+  await mkdir(join(root, ".harness"))
+  const base = { capability: "lint", provider: "eslint", privacy: "local-only" }
+  const passed = { ...base, kind: "recovery", outcome: "passed" }
+  const failures = ["a", "b", "c"].map((sessionId) => ({ ...base, kind: "violation", fingerprint: "one", sessionId, occurredAt: "2026-01-01" }))
+  const events = [passed, ...failures, passed, passed].map((e) => JSON.stringify(e)).join("\n")
+  await writeFile(join(root, ".harness/events.ndjson"), events)
+  await writeFile(join(root, "harness-settings.json"), JSON.stringify({ version: 1, promotion: { repositoryThreshold: 1 } }))
+  const report = await analyzePromotion(root)
+  assert.equal(report.candidates[0].successfulRecoveries, 1)
+  assert.deepEqual(report.proposals, [])
+  await writeFile(join(root, "harness-settings.json"), JSON.stringify({ version: 1, promotion: { mode: "off" } }))
+  assert.equal((await analyzePromotion(root, { write: true })).written, false)
+})
