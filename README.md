@@ -1,13 +1,18 @@
 # Codex Harness Plugin
 
-`codex-plugins/harness` は、既存リポジトリの品質コマンドを検出・実行・診断する Codex プラグインです。既存のリンター、フォーマッター、テストランナーを無断で追加・置換・更新しません。
+Harness は、リポジトリにある品質チェックを Codex から実行し、依頼の完了を実際の検証結果で確かめるプラグインです。モデルを問わず同じ合格条件を使えます。
 
-## はじめ方
+```text
+$harness-work この変更を実装して、利用者の操作経路とリポジトリの必須チェックで検証して。
+```
 
-1. [プラグインの導入・設定・運用ガイド](codex-plugins/harness/README.md) に従い、GitHub Marketplaceを Codex に追加します。
-2. 新しいCodexスレッドで `Harness でこのリポジトリを診断して` と依頼するか、CLIで `detect` を実行します。
-3. `adopt` の提案を確認してから、必要な場合のみ `adopt --write` で対象リポジトリへ設定を作成します。
+- 導入、設定例、既存設定の移行は [プラグインガイド](codex-plugins/harness/README.md) を参照してください。
+- 設計の根拠と調査した一次資料は [ハーネス設計](docs/knowledge/harness-engineering.md)、モデルの扱いと評価手順は [モデル対応と評価](docs/knowledge/model-aware-harness.md) にまとめています。
 
-ハーネス設計の根拠は [docs/knowledge/harness-engineering.md](docs/knowledge/harness-engineering.md) にまとめています。
+このチェックアウトでは次のコマンドを使えます。
 
-Astra・Sol・Terra・Luna向けの開発フローは `$harness-work` で利用できます。[モデル対応の根拠と検証範囲](docs/knowledge/model-aware-harness.md) に、公式情報、Hook改善、既存設定からの移行上の注意を記載しています。
+```bash
+npm run harness -- plan
+npm run harness -- verify --summary
+npm run bench:harness
+```

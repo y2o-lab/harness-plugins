@@ -1,4 +1,4 @@
-# GPT-5.6 Luna
+# Luna
 
 For clear, repeatable tasks, make the input, expected output, target files, and acceptance check explicit. Use a representative existing example when it clarifies the contract. Work in bounded units, inspect the result, and keep unrelated repository context out of tool output.
 

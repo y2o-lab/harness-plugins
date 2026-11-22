@@ -1,4 +1,4 @@
-# GPT-5.6 Terra
+# Terra
 
 For everyday implementation, identify the affected interface, repository conventions, and observable result. Divide a larger change into coherent steps with a relevant check at each meaningful boundary, without forcing a plan for a small edit.
 

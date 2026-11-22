@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Discover, verify, and improve repository quality workflows safely.",
   "author": {
     "name": "Harness Plugins"
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Harness",
     "shortDescription": "Evidence-based repository quality workflows.",
-    "longDescription": "Discovers existing quality commands, verifies changes through one CLI, and creates local evidence-backed improvement proposals.",
+    "longDescription": "Discovers existing quality commands, schedules dependent checks through one CLI, and creates local evidence-backed improvement proposals.",
     "developerName": "Harness Plugins",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

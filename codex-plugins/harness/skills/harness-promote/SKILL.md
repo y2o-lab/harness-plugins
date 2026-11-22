@@ -12,4 +12,4 @@ Read [the shared workflow](../../references/workflow.md) for authorization bound
 3. Classify the proposal: repository rule/settings, stack provider, or plugin core. Keep uncertainty at Observe or Advisory.
 4. Include the evidence, expected cost, rollback path, and the reason for the classification.
 
-This MVP never creates, updates, or searches GitHub issues. It must not change `AGENTS.md`, change a capability to `required`, install dependencies, or alter plugin defaults automatically. Those are human-review decisions.
+Keep proposals local. For a recurring failure, describe a reproducible check and its acceptance criterion. Apply policy changes only when the user requests implementation.

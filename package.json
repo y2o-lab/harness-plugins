@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test codex-plugins/harness/tests/*.test.mjs",
+    "bench:harness": "node codex-plugins/harness/bench/verification.mjs",
     "harness": "node codex-plugins/harness/scripts/harness.mjs"
   }
 }

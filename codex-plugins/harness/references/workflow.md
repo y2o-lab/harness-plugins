@@ -1,21 +1,14 @@
 # Shared Harness workflow
 
-User instructions and existing authorization take precedence over skill guidelines, subject to higher-priority instructions and execution permissions. A request to implement, fix, or adopt authorizes routine local work within that scope. Prepare and inspect concrete changes before asking for any genuinely missing decision. A request only for a preview, diagnosis, or report stays read-only. Do not add approval steps for work already authorized.
+Use the user's outcome and repository instructions to identify observable acceptance checks. Inspect existing scripts, CI and command overrides relevant to those checks. Keep the user's model, effort, task scope and authorization. A preview or diagnosis is read-only. Installation, publication and external messages need authorization appropriate to those actions.
 
-When a skill actually blocks work, cite the exact file and instruction, and explain why existing authorization does not cover the next action. Do not infer permission to publish, send messages, replace quality tools, or change unrelated settings.
+## Run the CLI
 
-## Resolve the CLI
+Resolve `../../scripts/harness.mjs` relative to the installed skill file. In the plugin source use `codex-plugins/harness/scripts/harness.mjs`. Invoke it with Node from the target root or pass `--root PATH`. If the installed path is unavailable, locate the installation once with `codex plugin list`.
 
-If working on this plugin's source, use its `scripts/harness.mjs`. Otherwise resolve `../../scripts/harness.mjs` relative to the actual installed SKILL.md you read (all bundled skills have this layout). Use an absolute path and run from the target repository, or pass `--root`. Confirm the file exists. Only fall back to `codex plugin list` if that relative path is unavailable; do not repeatedly rediscover the same installation or ask the user to set environment variables.
+## Verification loop
 
-## Efficient execution
-
-Keep instructions and tool results focused on the current decision. Read linked model guidance only for the active model. Preserve the user's chosen model and reasoning effort; no automatic escalation, model switch, or universal max effort. Measure task success, check failures, total time, and tokens before claiming a better setting.
-
-Batch independent read-only operations when useful. Run checks sequentially unless the repository establishes they can run concurrently without sharing mutable outputs. Delegate only when available and allowed by the active session, and an independent task has clear ownership, inputs, completion criteria, and integration value. Do not require subagents or nested delegation for routine changes.
-
-Use the existing checks appropriate to the change and required policy. Once those pass, finish unless new changes or evidence justify more verification. Do not add tests that only restate a reversible cosmetic edit. Never treat a skipped, timed-out, unavailable, or truncated check as proof of success; exit status and reported truncation remain visible.
-
-## Continuity
-
-Stay in the active Codex task. Preserve concise factual state across compaction: objective, user constraints and authorization, changed paths, decisions, verification evidence, pending work, and actual blockers. Do not restart completed research or checks just because context was compacted. Do not ask for or record private reasoning traces. Native reasoning persistence and compaction belong to the Codex host, not this plugin's event log.
+1. Identify how to observe the requested change at its normal entry point. Use `plan` when you need to see the selected commands, prerequisites or required checks before execution.
+2. Implement the change. Use `run CHECK --summary` for focused feedback while iterating. An exit code from a check and its prerequisites is stronger evidence than a description of intended behavior.
+3. Use `verify --summary` for the final phase. Inspect every reported status, including advisory failures and blocked dependents. After a failure, inspect the first incomplete prerequisite, change the input or repair the cause, then recheck. End automatic repair when the same evidence recurs. Report the concrete blocker and completed independent work.
+4. Finish once the requested behavior and required checks pass. Keep the objective, constraints, changed paths, evidence and outstanding work across steering and compaction. Record a repeatable regression as a repository check when it warrants one.

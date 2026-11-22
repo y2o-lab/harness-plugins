@@ -3,11 +3,12 @@ import { existsSync } from "node:fs"
 import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises"
 import { basename, join, resolve } from "node:path"
 import { runShell } from "./process-runner.mjs"
+import { buildPlan, executePlan, orderChecks } from "./verification-graph.mjs"
 
 export const CAPABILITIES = ["lint", "format", "typecheck", "test", "build"]
 const VALID_MODES = new Set(["off", "advisory", "required"])
 const VALID_STRATEGIES = new Set(["changed", "affected", "all"])
-const DEFAULT_QUALITY = Object.fromEntries(CAPABILITIES.map((name) => [name, { mode: "advisory", strategy: "all" }]))
+const DEFAULT_POLICY = { mode: "advisory", strategy: "all" }
 
 const scriptNames = {
   lint: ["lint", "check:lint"],
@@ -48,40 +49,55 @@ export async function loadSettings(root) {
   const diagnostics = []
   const object = (item) => item !== null && typeof item === "object" && !Array.isArray(item)
   if (value.version !== 1) diagnostics.push({ status: "error", code: "settings-version", message: "Harness settings must declare version: 1." })
-  for (const section of ["quality", "lifecycle", "guards", "execution"]) {
+  for (const section of ["quality", "lifecycle", "guards", "execution", "promotion"]) {
     if (value[section] !== undefined && !object(value[section])) diagnostics.push({ status: "error", code: "settings-invalid-section", message: `${section} must be an object.` })
   }
+  const known = new Set([...CAPABILITIES, ...Object.keys(value.quality ?? {})])
   for (const [capability, policy] of Object.entries(value.quality ?? {})) {
-    if (!CAPABILITIES.includes(capability)) diagnostics.push({ status: "warning", code: "settings-unknown-capability", message: `Unknown capability: ${capability}.` })
+    if (!CAPABILITIES.includes(capability) && (!/^[a-z][a-z0-9-]*$/.test(capability) || capability === "stop" || capability in Object.prototype || typeof policy?.command !== "string")) {
+      diagnostics.push({ status: "error", code: "settings-invalid-capability", message: `Custom check ${capability} requires a valid name and an explicit command.` })
+    }
+    const fields = ["mode", "strategy", "provider", "command", "dependsOn"]
+    if (object(policy) && Object.keys(policy).some((key) => !fields.includes(key))) diagnostics.push({ status: "error", code: "settings-unknown-policy-field", message: `Unknown policy field for ${capability}. Expected ${fields.join(", ")}.` })
+    if (policy?.provider !== undefined && typeof policy.provider !== "string") diagnostics.push({ status: "error", code: "settings-invalid-provider", message: `${capability}.provider must be a string.` })
+    if (policy?.dependsOn !== undefined && (!Array.isArray(policy.dependsOn) || policy.dependsOn.some((name) => !known.has(name)))) {
+      diagnostics.push({ status: "error", code: "settings-invalid-dependency", message: `${capability}.dependsOn must list existing checks.` })
+    }
     if (!object(policy)) diagnostics.push({ status: "error", code: "settings-invalid-policy", message: `Policy for ${capability} must be an object.` })
     if (policy?.mode !== undefined && !VALID_MODES.has(policy.mode)) diagnostics.push({ status: "error", code: "settings-invalid-mode", message: `${capability}.mode is invalid.` })
     if (policy?.strategy !== undefined && !VALID_STRATEGIES.has(policy.strategy)) diagnostics.push({ status: "error", code: "settings-invalid-strategy", message: `${capability}.strategy is invalid.` })
     if (policy?.command !== undefined && (typeof policy.command !== "string" || !policy.command.trim())) diagnostics.push({ status: "error", code: "settings-invalid-command", message: `${capability}.command must be a nonempty string.` })
   }
   for (const [phase, capabilities] of Object.entries(value.lifecycle ?? {})) {
-    if (!Array.isArray(capabilities) || capabilities.some((name) => !CAPABILITIES.includes(name))) diagnostics.push({ status: "error", code: "settings-invalid-lifecycle", message: `Invalid capabilities for lifecycle phase: ${phase}.` })
+    if (!Array.isArray(capabilities) || capabilities.some((name) => !known.has(name))) diagnostics.push({ status: "error", code: "settings-invalid-lifecycle", message: `Invalid capabilities for lifecycle phase: ${phase}.` })
+  }
+  if (!diagnostics.some((item) => item.status === "error")) {
+    try {
+      orderChecks(known, (name) => value.quality?.[name]?.dependsOn ?? [])
+    } catch (error) {
+      diagnostics.push({ status: "error", code: "settings-dependency-cycle", message: error.message })
+    }
   }
   for (const [key, limit] of Object.entries(value.execution ?? {})) {
-    const maximum = { timeoutMs: 3_600_000, maxOutputBytes: 1_048_576 }[key]
-    if (!maximum || !Number.isInteger(limit) || limit < 1 || limit > maximum) diagnostics.push({ status: "error", code: "settings-invalid-execution", message: `Invalid execution limit: ${key}.` })
+    const maximum = { timeoutMs: 3_600_000, maxOutputBytes: 1_048_576, maxParallel: 8 }[key]
+    if (!Number.isInteger(maximum) || !Number.isInteger(limit) || limit < 1 || limit > maximum) diagnostics.push({ status: "error", code: "settings-invalid-execution", message: `Invalid execution limit: ${key}.` })
   }
+  const promotion = value.promotion ?? {}
+  if (promotion.mode !== undefined && !["off", "advisory"].includes(promotion.mode)) diagnostics.push({ status: "error", code: "settings-invalid-promotion-mode", message: "Use off or advisory for promotion.mode." })
+  const threshold = promotion.repositoryThreshold
+  if (threshold !== undefined && (!Number.isFinite(threshold) || threshold < 0 || threshold > 1)) diagnostics.push({ status: "error", code: "settings-invalid-threshold", message: "promotion.repositoryThreshold must be between zero and one." })
   for (const [guard, policy] of Object.entries(value.guards ?? {})) {
     if (!object(policy) || (policy.mode !== undefined && !VALID_MODES.has(policy.mode))) diagnostics.push({ status: "error", code: "settings-invalid-guard", message: `Guard policy for ${guard} is invalid.` })
   }
   return { path, value, diagnostics }
 }
 
-function candidateProvider(capability, command, root) {
-  const lower = command.toLowerCase()
-  const names = Object.entries(providerFiles).filter(([, files]) => files.some((file) => existsSync(join(root, file)))).map(([name]) => name)
-  const ordered = {
-    lint: ["biome", "eslint"],
-    format: ["biome", "prettier"],
-    typecheck: ["typescript"],
-    test: ["vitest", "jest"],
-    build: []
-  }[capability]
-  return ordered.find((name) => lower.includes(name)) ?? ordered.find((name) => names.includes(name)) ?? "package-script"
+const providerOrder = {
+  lint: ["biome", "eslint"],
+  format: ["biome", "prettier"],
+  typecheck: ["typescript"],
+  test: ["vitest", "jest"],
+  build: []
 }
 
 export async function detectRepository(rootInput = process.cwd()) {
@@ -90,16 +106,17 @@ export async function detectRepository(rootInput = process.cwd()) {
   const packageResult = existsSync(packagePath) ? await readJson(packagePath) : { value: null, error: null }
   const scripts = packageResult.value?.scripts && typeof packageResult.value.scripts === "object" ? packageResult.value.scripts : {}
   const packageManager = existsSync(join(root, "pnpm-lock.yaml")) ? "pnpm" : existsSync(join(root, "yarn.lock")) ? "yarn" : existsSync(join(root, "package-lock.json")) ? "npm" : packageResult.value ? "npm" : null
+  const configEvidence = Object.entries(providerFiles).flatMap(([provider, files]) =>
+    files.filter((file) => existsSync(join(root, file))).map((path) => ({ kind: "config", path, detail: provider })))
   const capabilities = {}
   for (const capability of CAPABILITIES) {
     const script = scriptNames[capability].find((name) => typeof scripts[name] === "string")
-    const evidence = script ? [{ kind: "package-script", path: "package.json", detail: script }] : []
-    if (!script) {
-      const configNames = Object.entries(providerFiles).flatMap(([provider, files]) => files.filter((file) => existsSync(join(root, file))).map((file) => ({ provider, file })))
-      for (const item of configNames) evidence.push({ kind: "config", path: item.file, detail: item.provider })
-    }
+    const providers = providerOrder[capability]
+    const configs = configEvidence.filter((item) => providers.includes(item.detail))
+    const evidence = script ? [{ kind: "package-script", path: "package.json", detail: script }] : configs
+    const provider = script && (providers.find((name) => scripts[script].toLowerCase().includes(name)) ?? providers.find((name) => configs.some((config) => config.detail === name)) ?? "package-script")
     capabilities[capability] = script
-      ? { status: "detected", command: `${packageManager ?? "npm"} run ${script}`, provider: candidateProvider(capability, scripts[script], root), confidence: 0.95, evidence }
+      ? { status: "detected", command: `${packageManager ?? "npm"} run ${script}`, provider, confidence: 0.95, evidence }
       : { status: "not-applicable", command: null, provider: null, confidence: 0, evidence }
   }
   return {
@@ -114,17 +131,18 @@ export async function detectRepository(rootInput = process.cwd()) {
 export async function resolveCapabilities(rootInput = process.cwd()) {
   const root = normalizeRoot(rootInput)
   const [detection, settings] = await Promise.all([detectRepository(root), loadSettings(root)])
-  const resolved = {}
-  for (const capability of CAPABILITIES) {
-    const detected = detection.capabilities[capability]
+  const resolved = Object.create(null)
+  for (const capability of new Set([...CAPABILITIES, ...Object.keys(settings.value?.quality ?? {})])) {
+    const detected = Object.hasOwn(detection.capabilities, capability) ? detection.capabilities[capability] : { command: null, provider: null, confidence: 0, evidence: [] }
     const override = settings.value?.quality?.[capability] ?? {}
-    const policy = { ...DEFAULT_QUALITY[capability], ...override }
+    const policy = { ...DEFAULT_POLICY, ...override }
     const command = override.command ?? detected.command
     const provider = override.provider ?? detected.provider
     resolved[capability] = {
       capability,
       mode: policy.mode,
       strategy: policy.strategy,
+      dependsOn: Array.isArray(policy.dependsOn) ? [...new Set(policy.dependsOn)] : [],
       command,
       provider,
       status: policy.mode === "off" ? "off" : command ? "ready" : "not-applicable",
@@ -146,20 +164,17 @@ async function writeEvent(root, event) {
   await appendFile(join(directory, "events.ndjson"), `${JSON.stringify(event)}\n`, "utf8")
 }
 
-async function changedFiles(root, deadline) {
-  const result = await runShell("git diff --name-only HEAD", root, { timeoutMs: Math.max(1, Math.min(5000, (deadline ?? Infinity) - Date.now())) })
-  return result.exitCode === 0 ? result.stdout.split(/\r?\n/).map((file) => file.trim()).filter(Boolean) : []
+async function changedFileCount(root, deadline) {
+  const result = await runShell("git diff --name-only -z HEAD", root, { timeoutMs: Math.max(1, Math.min(5000, (deadline ?? Infinity) - Date.now())) })
+  if (result.exitCode || result.outputTruncated) return null
+  return result.stdout.split("\0").filter(Boolean).length
 }
 
-export async function runCapability(rootInput, capability, options = {}) {
-  const resolved = options.resolved ?? await resolveCapabilities(rootInput)
-  const diagnostics = [...resolved.settings.diagnostics, ...resolved.detection.diagnostics].filter((item) => item.status === "error")
-  if (diagnostics.length) return { status: "error", capability, code: "configuration-invalid", diagnostics, exitCode: 2 }
+async function executeCheck(resolved, capability, options) {
   const item = resolved.capabilities[capability]
-  if (!item) return { status: "error", code: "unknown-capability", message: `Unsupported capability: ${capability}.`, exitCode: 2 }
   if (item.status === "off") return { status: "skipped", capability, message: "Disabled by policy.", exitCode: 0 }
   if (!item.command) return { status: item.mode === "required" ? "error" : "not-applicable", capability, code: "capability-unresolved", message: "No existing check command was detected; configure an explicit command if needed.", exitCode: item.mode === "required" ? 1 : 0 }
-  const files = options.changedFiles ?? (item.strategy === "changed" ? await changedFiles(resolved.root, options.deadline) : [])
+  const filesChanged = options.changedFiles?.length ?? (item.strategy === "changed" ? await options.countChanges() : null)
   const strategy = item.strategy === "all" ? { requested: "all", effective: "all" } : { requested: item.strategy, effective: "all", reason: "The selected repository script has no safe, provider-neutral partial-target interface; running it unchanged." }
   const startedAt = new Date().toISOString()
   const started = Date.now()
@@ -170,14 +185,14 @@ export async function runCapability(rootInput, capability, options = {}) {
   const event = {
     eventId: `evt_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
     occurredAt: startedAt,
-    sessionId: hash(process.env.HARNESS_SESSION_ID ?? "local-session").slice(0, 24),
+    sessionId: hash(options.sessionId ?? process.env.HARNESS_SESSION_ID ?? "local-session").slice(0, 24),
     kind: result.exitCode === 0 ? "recovery" : "violation",
     capability,
     provider: item.provider,
     phase: options.phase ?? "manual",
     outcome: result.exitCode === 0 ? "passed" : "failed",
     durationMs: Date.now() - started,
-    scope: { filesChanged: files.length },
+    scope: { filesChanged },
     fingerprint: hash(`${capability}:${item.provider ?? "unknown"}:${result.exitCode === 0 ? "pass" : "failure"}`),
     privacy: "local-only"
   }
@@ -189,22 +204,36 @@ export async function runCapability(rootInput, capability, options = {}) {
   return { status: result.exitCode === 0 ? "passed" : "failed", capability, command: item.command, provider: item.provider, strategy, event, result, exitCode: result.exitCode }
 }
 
-export async function verify(rootInput, options = {}) {
+export async function planVerification(rootInput, options = {}) {
+  return buildPlan(await resolveCapabilities(rootInput), options)
+}
+
+async function runGraph(rootInput, options) {
+  const started = Date.now()
   const resolved = await resolveCapabilities(rootInput)
-  const phase = options.phase ?? "stop"
-  const configured = resolved.settings.value?.lifecycle?.[phase]
-  const diagnostics = [...resolved.settings.diagnostics, ...resolved.detection.diagnostics].filter((item) => item.status === "error")
-  if (diagnostics.length) return { phase, runs: [], diagnostics, exitCode: 2 }
-  const fallback = phase === "postEdit" ? [] : options.hook ? ["lint", "format", "typecheck"] : CAPABILITIES.filter((capability) => resolved.capabilities[capability].status === "ready")
-  const required = phase === "postEdit" ? [] : CAPABILITIES.filter((name) => resolved.capabilities[name].mode === "required")
-  const capabilities = [...new Set([...(configured ?? fallback), ...required])]
-  const runs = []
-  for (const capability of capabilities) {
-    const run = await runCapability(resolved.root, capability, { phase, resolved, deadline: options.deadline })
-    runs.push({ ...run, mode: resolved.capabilities[capability]?.mode })
-  }
+  const plan = buildPlan(resolved, options)
+  const { phase, diagnostics } = plan
+  if (plan.exitCode) return { phase, runs: [], diagnostics, exitCode: plan.exitCode }
+  let changes
+  const countChanges = () => (changes ??= changedFileCount(resolved.root, options.deadline))
+  const runs = await executePlan(plan, (capability) => executeCheck(resolved, capability, { ...options, phase, countChanges }))
   const requiredFailures = runs.filter((run) => run.exitCode !== 0 && run.mode === "required").map((run) => run.capability)
-  return { phase, runs, requiredFailures, exitCode: requiredFailures.length ? 1 : 0 }
+  const metrics = { elapsedMs: Date.now() - started, executed: runs.filter((run) => run.result).length, blocked: runs.filter((run) => run.status === "blocked").length }
+  const findings = runs.some((run) => run.exitCode || run.status === "not-applicable")
+  const status = requiredFailures.length ? "failed" : findings ? "findings" : metrics.executed ? "passed" : "no-checks"
+  return { phase, status, runs, requiredFailures, metrics, exitCode: requiredFailures.length ? 1 : 0 }
+}
+
+export async function runCapability(rootInput, capability, options = {}) {
+  if (typeof capability !== "string") return { status: "error", code: "unknown-capability", message: "Specify a check name.", exitCode: 2 }
+  const report = await runGraph(rootInput, { phase: "manual", ...options, target: capability })
+  if (report.diagnostics) return { capability, status: "error", code: report.diagnostics.some((item) => item.code === "unknown-capability") ? "unknown-capability" : "configuration-invalid", diagnostics: report.diagnostics, exitCode: 2 }
+  const target = report.runs.pop()
+  return report.runs.length ? { ...target, prerequisites: report.runs } : target
+}
+
+export async function verify(rootInput, options = {}) {
+  return runGraph(rootInput, options)
 }
 
 export async function doctor(rootInput) {
@@ -229,23 +258,31 @@ export async function doctor(rootInput) {
 
 export async function adopt(rootInput, pluginRoot, write = false) {
   const resolved = await resolveCapabilities(rootInput)
+  if (resolved.settings.diagnostics.some((item) => item.status === "error")) {
+    return { written: false, diagnostics: resolved.settings.diagnostics, exitCode: 2 }
+  }
+  if (resolved.settings.value) {
+    return { written: false, proposal: resolved.settings.value, message: "harness-settings.json already exists. Review the current configuration with plan or doctor." }
+  }
   const quality = {}
   for (const [capability, item] of Object.entries(resolved.capabilities)) {
     quality[capability] = { mode: item.command ? (capability === "lint" || capability === "format" ? "required" : "advisory") : "off", strategy: capability === "lint" || capability === "format" ? "changed" : "affected" }
   }
+  const ready = Object.keys(quality).filter((name) => quality[name].mode !== "off")
+  const fast = ["lint", "format", "typecheck"].filter((name) => ready.includes(name))
   const proposal = {
     $schema: "./.harness/schema/harness-settings.schema.json",
     version: 1,
     quality,
-    lifecycle: { postEdit: [], stop: ["lint", "format", "typecheck"] },
-    execution: { timeoutMs: 120_000, maxOutputBytes: 8192 },
+    lifecycle: { postEdit: [], stop: fast.length ? fast : ready.slice(0, 1) },
+    execution: { timeoutMs: 120_000, maxOutputBytes: 8192, maxParallel: 1 },
     guards: { dangerousCommands: { mode: "required" }, protectedFiles: { mode: "required" }, secrets: { mode: "required" } },
     promotion: { mode: "advisory", issueMode: "manual", repositoryThreshold: 0.7, pluginThreshold: 0.8 }
   }
   if (!write) return { written: false, proposal, message: "Dry run only. Re-run with --write after reviewing the proposal." }
   const settingsPath = join(resolved.root, "harness-settings.json")
   if (existsSync(settingsPath)) return { written: false, proposal, message: "harness-settings.json already exists; refusing to overwrite it." }
-  await writeFile(settingsPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8")
+  await writeFile(settingsPath, `${JSON.stringify(proposal, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
   await mkdir(join(resolved.root, ".harness", "schema"), { recursive: true })
   await cp(join(pluginRoot, "schemas", "harness-settings.schema.json"), join(resolved.root, ".harness", "schema", "harness-settings.schema.json"))
   const gitignorePath = join(resolved.root, ".gitignore")
@@ -258,52 +295,70 @@ export function evaluateDangerousCommand(command, settings = null) {
   const mode = settings?.guards?.dangerousCommands?.mode ?? "required"
   if (mode === "off" || typeof command !== "string") return { decision: "allow" }
   const patterns = [
-    { expression: /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*|-rf|-fr)\s+(?:\/|~)(?:\s|$)/, reason: "Refusing a recursive deletion rooted at / or the home directory." },
-    { expression: /\b(?:git\s+reset\s+--hard|git\s+clean\s+-[A-Za-z]*f)/, reason: "Refusing a destructive Git command through the automated hook." },
-    { expression: /\b(?:mkfs|dd)\b/, reason: "Refusing a disk-destructive command through the automated hook." }
+    { expression: /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*|-rf|-fr)\s+(?:\/|~)(?:\s|$)/, reason: "Recursive deletion targets / or the home directory." },
+    { expression: /\b(?:git\s+reset\s+--hard|git\s+clean\s+-[A-Za-z]*f)/, reason: "Tool input contains a destructive Git command." },
+    { expression: /\b(?:mkfs|dd)\b/, reason: "Tool input contains a disk-destructive command." }
   ]
   const match = patterns.find((item) => item.expression.test(command))
-  return match ? { decision: "deny", reason: match.reason } : { decision: "allow" }
+  return match ? { decision: mode === "advisory" ? "warn" : "deny", reason: match.reason } : { decision: "allow" }
 }
 
 export function evaluateToolGuard(command, settings = null) {
   const dangerous = evaluateDangerousCommand(command, settings)
   if (dangerous.decision === "deny") return dangerous
   if (typeof command !== "string") return { decision: "allow" }
+  let warning = dangerous
   const secretsMode = settings?.guards?.secrets?.mode ?? "required"
   if (secretsMode !== "off" && /(?:\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/.test(command)) {
-    return { decision: "deny", reason: "Refusing a tool input containing a likely secret; use an ignored local environment file or approved secret manager." }
+    const reason = "Tool input contains a likely secret."
+    if (secretsMode !== "advisory") return { decision: "deny", reason }
+    warning = { decision: "warn", reason }
   }
   const protectedMode = settings?.guards?.protectedFiles?.mode ?? "required"
   if (protectedMode !== "off" && /\*\*\*\s+(?:Add|Update|Delete) File:\s+(?:\.env(?!\.example\b)(?:\.[^\s]+)?|appsettings(?:\.[^\s]+)?\.json)\b/.test(command)) {
-    return { decision: "deny", reason: "Refusing an automated edit to a protected environment configuration file." }
+    const reason = "Tool input edits a protected environment configuration file."
+    if (protectedMode !== "advisory") return { decision: "deny", reason }
+    warning = { decision: "warn", reason }
   }
-  return { decision: "allow" }
+  return warning
 }
 
 export async function analyzePromotion(rootInput, options = {}) {
   const root = normalizeRoot(rootInput)
+  const settings = await loadSettings(root)
+  if (settings.diagnostics.some((item) => item.status === "error")) return { candidates: [], proposals: [], diagnostics: settings.diagnostics, written: false, exitCode: 2 }
+  const policy = settings.value?.promotion
+  if (policy?.mode === "off") return { candidates: [], proposals: [], status: "off", written: false }
   const eventPath = join(root, ".harness", "events.ndjson")
-  if (!existsSync(eventPath)) return { candidates: [], markdown: "# Harness Health\n\nNo local events have been recorded.\n" }
-  const lines = (await readFile(eventPath, "utf8")).split(/\r?\n/).filter(Boolean)
+  const lines = existsSync(eventPath) ? (await readFile(eventPath, "utf8")).split(/\r?\n/).filter(Boolean) : []
   const events = lines.flatMap((line) => { try { return [JSON.parse(line)] } catch { return [] } }).filter((event) => event?.privacy === "local-only")
   const groups = new Map()
-  for (const event of events.filter((event) => event.kind === "violation")) {
-    const group = groups.get(event.fingerprint) ?? { events: [], capability: event.capability, provider: event.provider, fingerprint: event.fingerprint }
+  const unresolved = new Map()
+  for (const event of events) {
+    const key = JSON.stringify([event.capability, event.provider])
+    if (event.kind === "recovery" && event.outcome === "passed") {
+      const previous = unresolved.get(key)
+      if (previous) previous.successfulRecoveries++
+      unresolved.delete(key)
+      continue
+    }
+    if (event.kind !== "violation") continue
+    const group = groups.get(event.fingerprint) ?? { events: [], successfulRecoveries: 0, capability: event.capability, provider: event.provider, fingerprint: event.fingerprint }
     group.events.push(event)
     groups.set(event.fingerprint, group)
+    unresolved.set(key, group)
   }
   const candidates = [...groups.values()].map((group) => {
     const sessions = new Set(group.events.map((event) => event.sessionId)).size
     const days = new Set(group.events.map((event) => String(event.occurredAt).slice(0, 10))).size
     const recurrence = Math.min(1, group.events.length / 3)
-    const successfulRecoveries = events.filter((event) => event.kind === "recovery" && event.outcome === "passed" && event.capability === group.capability && event.provider === group.provider).length
+    const { successfulRecoveries } = group
     const confidence = group.provider && group.provider !== "unknown" ? 0.95 : 0.6
     const impact = group.capability === "lint" || group.capability === "typecheck" ? 0.95 : 0.7
     const fixability = successfulRecoveries > 0 ? 0.95 : 0.9
     const distribution = Math.min(1, sessions / 3)
     const score = Number((recurrence * confidence * impact * fixability * distribution).toFixed(3))
-    const level = score >= 0.7 && sessions >= 3 ? "L2 repository proposal" : score >= 0.4 ? "L1 advisory" : "L0 observe"
+    const level = score >= (policy?.repositoryThreshold ?? 0.7) && sessions >= 3 ? "L2 repository proposal" : score >= 0.4 ? "L1 advisory" : "L0 observe"
     const promotionId = `quality:${group.capability}:prevent-repeat:v1`
     const proposal = level === "L2 repository proposal" ? {
       promotionId,
@@ -318,7 +373,7 @@ export async function analyzePromotion(rootInput, options = {}) {
     return { ...group, occurrences: group.events.length, sessions, days, successfulRecoveries, score, level, promotionId, proposal }
   }).sort((a, b) => b.score - a.score)
   const proposals = candidates.flatMap((candidate) => candidate.proposal ? [candidate.proposal] : [])
-  const markdown = ["# Harness Health", "", `Last analyzed: ${new Date().toISOString()}`, "", "| Pattern | Occurrences | Sessions | Days | Recoveries | Score | Status |", "|---|---:|---:|---:|---:|---:|---|", ...candidates.map((item) => `| ${item.capability} (${item.provider ?? "unknown"}) | ${item.occurrences} | ${item.sessions} | ${item.days} | ${item.successfulRecoveries} | ${item.score} | ${item.level} |`), "", "## Promotion proposals", "", ...proposals.flatMap((proposal) => [`### ${proposal.promotionId}`, "", `- Evidence: ${proposal.evidence.occurrences} occurrences / ${proposal.evidence.distinctSessions} sessions / ${proposal.evidence.days} days`, `- Successful recoveries: ${proposal.evidence.successfulRecoveries}`, `- Target: ${proposal.proposedTarget}`, `- Change: ${proposal.suggestedChange}`, `- Cost: ${proposal.estimatedCost}`, `- Risk: ${proposal.risk}`, `- Rollback: ${proposal.rollback}`, ""]), proposals.length === 0 ? "No candidate met the repository-proposal threshold." : "", "", "Proposals are local and advisory. This MVP does not create or update GitHub issues.", ""].join("\n")
+  const markdown = ["# Harness Health", "", `Last analyzed: ${new Date().toISOString()}`, "", "| Pattern | Occurrences | Sessions | Days | Recoveries | Score | Status |", "|---|---:|---:|---:|---:|---:|---|", ...candidates.map((item) => `| ${item.capability} (${item.provider ?? "unknown"}) | ${item.occurrences} | ${item.sessions} | ${item.days} | ${item.successfulRecoveries} | ${item.score} | ${item.level} |`), "", "## Promotion proposals", "", ...proposals.flatMap((proposal) => [`### ${proposal.promotionId}`, "", `- Evidence: ${proposal.evidence.occurrences} occurrences / ${proposal.evidence.distinctSessions} sessions / ${proposal.evidence.days} days`, `- Successful recoveries: ${proposal.evidence.successfulRecoveries}`, `- Target: ${proposal.proposedTarget}`, `- Change: ${proposal.suggestedChange}`, `- Cost: ${proposal.estimatedCost}`, `- Risk: ${proposal.risk}`, `- Rollback: ${proposal.rollback}`, ""]), proposals.length === 0 ? "No candidate met the repository-proposal threshold." : "", "", "Review these local proposals before changing repository policy.", ""].join("\n")
   if (options.write) {
     await mkdir(join(root, ".harness"), { recursive: true })
     await writeFile(join(root, ".harness", "dashboard.md"), markdown, "utf8")

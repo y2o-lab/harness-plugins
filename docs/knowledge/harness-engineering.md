@@ -1,34 +1,23 @@
-# Harness engineering notes
+# Codex Harness の設計根拠
 
-## Sources consulted
+2026年11月22日に確認した一次資料と、このプラグインでの設計判断をまとめる。
 
-- OpenAI, [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/ja-JP/index/harness-engineering/) (2026-02-11).
-- OpenAI Developers, [Build plugins](https://developers.openai.com/codex/plugins/).
-- OpenAI, [Codex hooks](https://learn.chatgpt.com/docs/hooks.md).
-- Nexu, [Harness Engineering Guide](https://github.com/nexu-io/harness-engineering-guide) (supplementary, non-authoritative).
+| 一次資料 | このリポジトリでの適用 |
+| --- | --- |
+| [OpenAI の Harness engineering](https://openai.com/index/harness-engineering/) | リポジトリ内の指示を短い入口にし、確かめられる品質条件はコマンドとして残す。スキルから既存の CI・スクリプトを参照し、実行計画を CLI で読めるようにした。 |
+| [OpenAI の Codex 向けプロンプトガイド](https://learn.chatgpt.com/docs/prompting) | ユーザーが目的、保存したい制約、検証方法を指定できる。モデルによる完了報告は、実際に確認できた操作経路とコマンド結果に結びつける。 |
+| [OpenAI の改善ループの実例](https://developers.openai.com/cookbook/examples/agents_sdk/agent_improvement_loop) | 観測と評価を次の改善につなげる。ローカルイベントで失敗の再発、セッション分布、失敗後の回復を集計する。チームが採用した再現条件はカスタムチェックとして設定できる。 |
+| [LangGraph の workflows and agents](https://docs.langchain.com/oss/python/langgraph/workflows-agents) | 手順が明確な品質検証には決定的なワークフローを選んだ。依存する検証は順序を守り、独立したものだけに実行枠を割り当てる。この用途には Node.js 標準機能で足りる。 |
+| [Codex Hooks](https://learn.chatgpt.com/docs/hooks) | Stop のブロックと理由を構造化し、ホストの `stop_hook_active` で追加継続を制限する。同じ検証コアを手動 CLI からも呼び出せる。 |
 
-## Decisions applied here
+## 検証グラフ
 
-1. **Make repository knowledge inspectable, concise, and progressively disclosed.** OpenAI advises treating `AGENTS.md` as a map rather than an encyclopaedia, with durable detail in structured documentation. This plugin keeps Skills short, puts policy in `harness-settings.json`, and makes the CLI print evidence for each decision.
-2. **Enforce invariants, not an implementation preference.** The public interface is capability-first (`lint`, `format`, `typecheck`, `test`, `build`). A provider is an evidence-backed implementation choice, so an existing `pnpm lint` wins over a guessed linter executable.
-3. **Use an executable feedback loop.** Skills provide judgment and reporting; `harness` performs detection, validation, execution, event recording, and promotion analysis. Hook adapters share the CLI's verification core, so hooks are never the sole enforcement path.
-4. **Keep safety boundaries and automation levels explicit.** `off`, `advisory`, and `required` distinguish observation from a quality gate. `adopt` is dry-run by default; writing settings requires `--write`. Promotion is local and advisory by default; no GitHub mutation exists in the MVP.
-5. **Turn repeated failure into evidence, not automatic policy.** Events retain no source contents, environment values, or command arguments. Promotion deduplicates by fingerprint and evaluates recurrence, confidence, impact, fixability, and distribution before producing a Markdown proposal.
-6. **Prefer fast, scoped feedback without hiding uncertainty.** Changed-file strategy is used only for providers that can receive files. If a partial command cannot be established safely, the plan reports the fallback and runs the repository command unchanged.
+`plan` はフェーズの開始点と必須チェックから前提をたどる。すべての定義で未知の依存先と循環を検出してから実行する。ノードの識別子はチェック名で、共有する前提を一度だけ実行する。依存するノードは前提全件の成功後に開始する。実行できなかった前提は後続の直接の原因として報告する。並列実行中も結果は計画順で読める。
 
-## MVP boundary
+並列数はリポジトリ所有者が設定する。既存のコマンドが出力や外部状態を共有する可能性があるため、初期値を1とした。手動・Hook 間の実行結果を使い回すには環境変数、生成物、外部サービスなどの入力の同一性を保証する必要がある。この版の重複排除は1回の実行内に限定する。
 
-The implementation intentionally supports Node.js/TypeScript repository discovery first. It recognizes package-manager lockfiles and package scripts, then reports unknown capability states rather than installing dependencies or guessing destructive changes. Cross-repository aggregation, automatic issue creation, provider replacement, and automatic escalation to `required` remain outside the MVP.
+## ユーザーが調整する箇所
 
-## Hook contract
+共通のチーム規約は対象プロジェクトの `AGENTS.md`、機械判定するチェックと順序は `harness-settings.json`、今回だけの成果物と完了条件は依頼本文に置く。たとえば「既存のログイン導線を保持する」は依頼の制約として伝え、再発を検出できる画面テストがあれば、その既存コマンドを必須チェックにできる。スキルや Hook が増える前に、その確認でどんな失敗を区別できるかを決める。
 
-The bundled hook file uses Codex's supported `PreToolUse`, `PostToolUse`, and
-`Stop` events. Commands resolve from `PLUGIN_ROOT`, read event JSON from stdin,
-and return only small structured status messages. `PreToolUse` checks destructive
-shell patterns, protected files, and likely secrets. `PostToolUse` and `Stop`
-use the same verification core as
-manual verification, so a disabled, untrusted, or timed-out hook never creates
-a second or hidden quality path.
-
-Model-specific guidance, current lifecycle behavior, and evaluation boundaries
-are documented in [model-aware-harness.md](model-aware-harness.md).
+このリポジトリ自身は `npm test` を必須にしている。グラフの分岐、合流、失敗の伝播、打ち切り、実行件数、CLI と Hook の整合性をローカルテストで確かめる。性能評価は [モデル対応と評価](model-aware-harness.md) に記載した。

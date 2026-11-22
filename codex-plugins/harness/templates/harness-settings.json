@@ -12,7 +12,7 @@
     "postEdit": [],
     "stop": ["lint", "format", "typecheck"]
   },
-  "execution": { "timeoutMs": 120000, "maxOutputBytes": 8192 },
+  "execution": { "timeoutMs": 120000, "maxOutputBytes": 8192, "maxParallel": 1 },
   "guards": {
     "dangerousCommands": { "mode": "required" },
     "protectedFiles": { "mode": "required" },
